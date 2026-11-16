@@ -3,6 +3,7 @@ from decimal import Decimal
 from .catalog import Catalog
 from .errors import Conflict, Invariant, Stale, require
 from .quality import Quality
+from .restrictions import Restrictions
 from .store import Store
 from .values import as_number, day, decimal, identifier, text
 
@@ -71,6 +72,7 @@ class Orders:
             quality = self.quality.classify(db, lot)
             if quality["status"] != "passed":
                 raise Invariant("lot must pass quality before reservation")
+            Restrictions.ensure_commitment_allowed(db, lot)
             if db.execute("SELECT 1 FROM reservations WHERE reservation_id=?", (reservation_id,)).fetchone():
                 raise Conflict("reservation_id already exists")
             order_used = self._sum(db, "SELECT quantity FROM reservations WHERE order_id=? AND status='active'", order_id)

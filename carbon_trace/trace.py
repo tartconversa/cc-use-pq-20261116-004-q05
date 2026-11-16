@@ -1,6 +1,7 @@
 from .catalog import Catalog
 from .errors import require
 from .quality import Quality
+from .restrictions import Restrictions
 from .store import Store
 from .values import identifier
 
@@ -9,6 +10,7 @@ class Trace:
     def __init__(self, store: Store):
         self.store = store
         self.quality = Quality()
+        self.restrictions = Restrictions(store)
 
     def lot(self, lot_id: str) -> dict:
         lot_id = identifier(lot_id, "lot_id")
@@ -22,16 +24,31 @@ class Trace:
                 "SELECT * FROM shipments WHERE lot_id=? ORDER BY shipped_at,shipment_id", (lot_id,))]
             reservations = [dict(row) for row in db.execute(
                 "SELECT * FROM reservations WHERE lot_id=? ORDER BY created_revision,reservation_id", (lot_id,))]
+            restriction_rows = db.execute(
+                "SELECT * FROM source_restrictions WHERE source=? ORDER BY effective_at,restriction_id",
+                (lot["source"],)).fetchall()
+            restrictions = [self.restrictions._present(row) for row in restriction_rows]
+            review_rows = db.execute(
+                "SELECT rv.* FROM restriction_reviews rv JOIN source_restrictions sr "
+                "ON sr.restriction_id=rv.restriction_id WHERE sr.source=? ORDER BY rv.reviewed_revision",
+                (lot["source"],)).fetchall()
+            reviews = [dict(row) for row in review_rows
+                       if any(rv["reservation_id"] == row["reservation_id"]
+                              for rv in reservations)]
             revisions = sorted({lot["accepted_revision"]} |
                                {row["accepted_revision"] for row in assays + shipments} |
                                {row["created_revision"] for row in reservations} |
-                               {row["released_revision"] for row in reservations if row["released_revision"]})
+                               {row["released_revision"] for row in reservations if row["released_revision"]} |
+                               {row["created_revision"] for row in restriction_rows} |
+                               {row["lifted_revision"] for row in restriction_rows if row["lifted_revision"]} |
+                               {row["reviewed_revision"] for row in review_rows})
             audit = [dict(row) for row in db.execute(
                 "SELECT * FROM audit WHERE revision IN (%s) ORDER BY revision" %
                 ",".join("?" for _ in revisions), tuple(revisions))] if revisions else []
             return {"lot": dict(lot), "line": dict(line),
                     "quality": self.quality.classify(db, lot), "assays": assays,
                     "shipments": shipments, "reservations": reservations,
+                    "source_restrictions": restrictions, "restriction_reviews": reviews,
                     "audit": audit, "source_revision": Store.revision(db)}
 
     def revision(self, revision: int) -> dict:
@@ -44,11 +61,19 @@ class Trace:
                      "specification": ("specifications", "spec_id"), "lot": ("lots", "lot_id"),
                      "assay": ("assays", "assay_id"), "shipment": ("shipments", "shipment_id"),
                      "order": ("orders", "order_id"), "reservation": ("reservations", "reservation_id"),
-                     "source_policy": ("source_policies", "source")}.get(kind)
+                     "source_policy": ("source_policies", "source"),
+                     "restriction_open": ("source_restrictions", "restriction_id"),
+                     "restriction_lift": ("source_restrictions", "restriction_id")}.get(kind)
             entity = None
             if table:
                 entity_row = db.execute(f"SELECT * FROM {table[0]} WHERE {table[1]}=?", (ref,)).fetchone()
                 entity = dict(entity_row) if entity_row else None
+            elif kind == "restriction_review":
+                restriction_id, reservation_id = ref.split(":", 1)
+                review_row = db.execute(
+                    "SELECT * FROM restriction_reviews WHERE restriction_id=? AND reservation_id=?",
+                    (restriction_id, reservation_id)).fetchone()
+                entity = dict(review_row) if review_row else None
             return {"audit": dict(audit), "entity": entity,
                     "current_revision": Store.revision(db)}
 

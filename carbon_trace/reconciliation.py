@@ -1,9 +1,10 @@
-from collections import Counter, defaultdict
+from collections import Counter
 from decimal import Decimal
 
 from .catalog import Catalog
 from .errors import require
 from .quality import Quality
+from .restrictions import Restrictions
 from .store import Store
 from .values import as_number, day, decimal, identifier
 
@@ -12,6 +13,7 @@ class Reconciliation:
     def __init__(self, store: Store):
         self.store = store
         self.quality = Quality()
+        self.restrictions = Restrictions(store)
 
     def plant(self, plant_id: str, from_day: str, to_day: str) -> dict:
         plant_id = identifier(plant_id, "plant_id")
@@ -65,6 +67,13 @@ class Reconciliation:
         if any(row["sampled_at"] < lot["produced_at"] for row in db.execute(
                 "SELECT sampled_at FROM assays WHERE lot_id=?", (lot["lot_id"],))):
             issues.append("assay_before_production")
+        active_restrictions = Restrictions.active_rows(db, lot["source"], Restrictions._now())
+        if active_restrictions:
+            issues.append("source_restricted")
+        active_pending = [row for row in reservations if row["status"] == "active"]
+        if any(self.restrictions.pending_legacy_reservation(db, lot["source"], row["reservation_id"])
+               for row in active_pending):
+            issues.append("legacy_commitment_pending_review")
         return {"lot_id": lot["lot_id"], "local_day": lot["local_day"],
                 "quality_status": quality["status"], "produced_tons": as_number(produced),
                 "shipped_tons": as_number(shipped), "reserved_tons": as_number(reserved),

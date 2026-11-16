@@ -89,6 +89,34 @@ def create_app(database: str | None = None) -> FastAPI:
     def lot_quality(lot_id: str):
         return service.quality_of_lot(lot_id)
 
+    @app.get("/lots/{lot_id}/availability")
+    def lot_availability(lot_id: str, at: str | None = None):
+        return service.lot_availability(lot_id, at)
+
+    @app.post("/restrictions", status_code=201)
+    def open_restriction(payload: Payload):
+        return service.open_restriction(payload.model_dump())
+
+    @app.post("/restrictions/{restriction_id}/lift", status_code=201)
+    def lift_restriction(restriction_id: str, payload: Payload):
+        return service.lift_restriction(restriction_id, payload.model_dump())
+
+    @app.get("/restrictions/{restriction_id}")
+    def get_restriction(restriction_id: str):
+        return service.get_restriction(restriction_id)
+
+    @app.get("/restrictions")
+    def list_restrictions(source: str | None = None):
+        return service.list_restrictions(source)
+
+    @app.get("/restrictions/{restriction_id}/review-queue")
+    def restriction_review_queue(restriction_id: str):
+        return service.restriction_review_queue(restriction_id)
+
+    @app.post("/restrictions/reviews", status_code=201)
+    def review_restriction(payload: Payload):
+        return service.review_restriction(payload.model_dump())
+
     @app.get("/plants/{plant_id}/report")
     def report(plant_id: str, from_day: str, to_day: str):
         return service.report(plant_id, from_day, to_day)

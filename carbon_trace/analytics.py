@@ -6,6 +6,7 @@ from .catalog import Catalog
 from .errors import InvalidInput, require
 from .incidents import Incidents
 from .quality import Quality
+from .restrictions import Restrictions
 from .store import Store
 from .values import as_number, day, decimal, identifier
 
@@ -14,6 +15,7 @@ class Analytics:
     def __init__(self, store: Store):
         self.store = store
         self.quality = Quality()
+        self.restrictions = Restrictions(store)
 
     def report(self, plant_id: str, from_day: str, to_day: str) -> dict:
         plant_id = identifier(plant_id, "plant_id")
@@ -96,11 +98,15 @@ class Analytics:
         plant_id = identifier(plant_id, "plant_id")
         as_of = day(as_of, "as_of")
         with self.store.read() as db:
-            Catalog.plant(db, plant_id)
+            plant = Catalog.plant(db, plant_id)
+            # 以工厂当地当日结束时点评估来源限制，保证按天查询的可解释性
+            as_of_instant = Restrictions.day_end_instant(as_of, plant["timezone"])
             lots = db.execute("SELECT lots.* FROM lots JOIN lines ON lines.line_id=lots.line_id "
                               "WHERE lines.plant_id=? AND lots.local_day<=? ORDER BY lots.local_day,lots.lot_id",
                               (plant_id, as_of)).fetchall()
             entries = []
+            available_total = Decimal(0)
+            restricted_total = Decimal(0)
             for lot in lots:
                 shipped = db.execute("SELECT quantity FROM shipments WHERE lot_id=? AND local_day<=?",
                                      (lot["lot_id"], as_of)).fetchall()
@@ -110,13 +116,26 @@ class Analytics:
                 if remaining <= 0:
                     continue
                 quality = self.quality.classify(db, lot)
+                restriction_rows = Restrictions.active_rows(db, lot["source"], as_of_instant)
+                restricted = bool(restriction_rows)
+                if restricted:
+                    restricted_total += remaining
+                else:
+                    available_total += remaining
                 entries.append({"lot_id": lot["lot_id"], "grade": lot["grade"],
-                                "produced_day": lot["local_day"], "quantity": as_number(quantity),
+                                "produced_day": lot["local_day"], "source": lot["source"],
+                                "quantity": as_number(quantity),
                                 "shipped": as_number(shipped_tons), "remaining": as_number(remaining),
-                                "quality_status": quality["status"], "assay_id": quality["assay_id"]})
+                                "quality_status": quality["status"], "assay_id": quality["assay_id"],
+                                "restricted": restricted,
+                                "available": not restricted,
+                                "restrictions": Restrictions.summary(restriction_rows)})
             total = sum((decimal(row["remaining"], "remaining") for row in entries), Decimal(0))
-            return {"plant_id": plant_id, "as_of": as_of, "source_revision": Store.revision(db),
-                    "remaining_tons": as_number(total), "lots": entries}
+            return {"plant_id": plant_id, "as_of": as_of, "as_of_instant": as_of_instant,
+                    "source_revision": Store.revision(db),
+                    "remaining_tons": as_number(total),
+                    "available_tons": as_number(available_total),
+                    "restricted_tons": as_number(restricted_total), "lots": entries}
 
     def compare(self, plant_id: str, from_day: str, to_day: str, version: int) -> dict:
         from .publication import Publication

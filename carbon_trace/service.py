@@ -7,6 +7,7 @@ from .orders import Orders
 from .forecast import Forecast
 from .delivery import Delivery
 from .reconciliation import Reconciliation
+from .restrictions import Restrictions
 from .trace import Trace
 from .publication import Publication
 from .quality import Quality
@@ -29,6 +30,7 @@ class Service:
         self.analytics = Analytics(self.store)
         self.publication = Publication(self.store)
         self.quality = Quality()
+        self.restrictions = Restrictions(self.store)
 
     def register_plant(self, payload: dict) -> dict:
         return self.catalog.add_plant(mapping(payload))
@@ -50,7 +52,16 @@ class Service:
         return self.analytics.inventory(plant_id, as_of)
 
     def quality_of_lot(self, lot_id: str) -> dict:
-        return self.quality.lot(self.store, identifier(lot_id, "lot_id"))
+        lot_id = identifier(lot_id, "lot_id")
+        with self.store.read() as db:
+            lot = Store.one(db, "SELECT * FROM lots WHERE lot_id=?", (lot_id,), "lot")
+            classification = self.quality.classify(db, lot)
+            active = Restrictions.active_rows(db, lot["source"], Restrictions._now())
+            classification["compliance"] = {
+                "source": lot["source"],
+                "restricted": bool(active),
+                "restrictions": [self.restrictions._present(row) for row in active]}
+            return classification
 
     def prepare(self, payload: dict) -> dict:
         payload = mapping(payload)
@@ -93,3 +104,25 @@ class Service:
         payload = mapping(payload)
         return self.incidents.close(incident_id, payload.get("ended_at"),
                                     payload.get("expected_revision"))
+
+    def open_restriction(self, payload: dict) -> dict:
+        return self.restrictions.open(mapping(payload))
+
+    def lift_restriction(self, restriction_id: str, payload: dict) -> dict:
+        return self.restrictions.lift(restriction_id, mapping(payload))
+
+    def get_restriction(self, restriction_id: str) -> dict:
+        return self.restrictions.get(restriction_id)
+
+    def list_restrictions(self, source: str | None = None) -> list[dict]:
+        return (self.restrictions.list_for_source(source) if source
+                else self.restrictions.list_all())
+
+    def lot_availability(self, lot_id: str, at: str | None = None) -> dict:
+        return self.restrictions.explain(lot_id, at)
+
+    def restriction_review_queue(self, restriction_id: str) -> dict:
+        return self.restrictions.review_queue(restriction_id)
+
+    def review_restriction(self, payload: dict) -> dict:
+        return self.restrictions.review(mapping(payload))

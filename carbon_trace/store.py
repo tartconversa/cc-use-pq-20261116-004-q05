@@ -122,6 +122,18 @@ CREATE TABLE IF NOT EXISTS commitments (
     shipment_id TEXT NOT NULL UNIQUE REFERENCES shipments(shipment_id),
     quantity TEXT NOT NULL, accepted_revision INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS source_restrictions (
+    restriction_id TEXT PRIMARY KEY, source TEXT NOT NULL,
+    reason TEXT NOT NULL, effective_at TEXT NOT NULL, lifted_at TEXT,
+    created_revision INTEGER NOT NULL, lifted_revision INTEGER
+);
+CREATE INDEX IF NOT EXISTS source_restrictions_source ON source_restrictions(source,effective_at);
+CREATE TABLE IF NOT EXISTS restriction_reviews (
+    restriction_id TEXT NOT NULL REFERENCES source_restrictions(restriction_id),
+    reservation_id TEXT NOT NULL REFERENCES reservations(reservation_id),
+    note TEXT NOT NULL, reviewed_revision INTEGER NOT NULL,
+    PRIMARY KEY(restriction_id,reservation_id)
+);
 """
 
 
